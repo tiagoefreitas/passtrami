@@ -115,6 +115,53 @@ func runJavaScriptTests() async throws {
         try engineExpect(SessionScript.hostname(input) == expected, "Website normalization changed")
     }
 
+    // Some native-helper lookups require URL-form queries for single-label hosts.
+    for op in ["list", "get"] {
+        let f = try ScriptFixture()
+        let token = try await f.start()
+        try f.connect("bridge", token: token, state: "SessionKeySet")
+        try f.request("host", op: op, domain: "build-server", username: "person")
+        let first = try await f.sent("bridge")
+        try engineExpect(first["url"] as? String == "build-server", "Bare-host lookup changed")
+        try f.nativeReply("bridge", request: first, status: 3)
+        let fallback = try await f.sent("bridge")
+        try engineExpect(fallback["url"] as? String == "https://build-server", "Missing URL-form fallback")
+        let body = fallback["body"] as? [String: Any]
+        try engineExpect(body?["URL"] as? String == "https://build-server", "Fallback body URL differs")
+        try f.message("bridge", ["id": fallback["id"]!, "data": ["STATUS": 0, "Entries": [
+            ["USR": "person", "PWD": "fixture-only", "sites": ["build-server"]],
+            ["USR": "person", "PWD": "wrong-secret", "sites": ["build-server.attacker.test"]]
+        ]]])
+        let response = try await f.response("host")
+        if op == "list" {
+            try engineExpect(response["usernames"] as? [String] == ["person"] && response["password"] == nil,
+                             "Fallback account listing changed its scope")
+        } else {
+            try engineExpect(response["password"] as? String == "fixture-only", "Fallback lost exact-host filtering")
+        }
+    }
+
+    for (domain, status, shouldRetry) in [("build-server", 3, true), ("example.test", 3, false),
+                                         ("build-server", 0, false), ("build-server", 1, false)] {
+        let f = try ScriptFixture()
+        let token = try await f.start()
+        try f.connect("bridge", token: token, state: "SessionKeySet")
+        try f.request("bounded", op: "list", domain: domain)
+        let first = try await f.sent("bridge")
+        try f.nativeReply("bridge", request: first, status: status)
+        if shouldRetry {
+            let second = try await f.sent("bridge")
+            try f.nativeReply("bridge", request: second, status: 3)
+        }
+        let response = try await f.response("bounded")
+        if status == 1 {
+            try engineExpect(response["code"] as? String == "native_error", "Native error was hidden")
+        } else {
+            try engineExpect(response["ok"] as? Bool == true, "Account lookup failed")
+        }
+        try engineExpect(!f.posts.contains { $0["op"] as? String == "send" }, "Lookup retried unexpectedly")
+    }
+
     // Settings can prepare or retry Chromium without starting a PIN challenge or a second setup.
     do {
         let f = try ScriptFixture()
