@@ -220,16 +220,6 @@
           if (activeAccess?.expired) throw new RequestError('timeout', 'Password access timed out. Try again.');
           if (generation !== currentGeneration || sessionRevision !== currentSessionRevision || phase !== 'unlocked') throw new RequestError('locked', 'The password session changed. Try again.');
           data = await nativeRequest(message, client);
-          // Keep the normal hostname query first. A single-label host may need
-          // URL form; retry only an explicit native no-result, under the same
-          // authorization and access guard. Validate results against domain below.
-          if (data.STATUS === 3 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(domain)) {
-            checkClient(client);
-            if (activeAccess?.expired) throw new RequestError('timeout', 'Password access timed out. Try again.');
-            if (generation !== currentGeneration || sessionRevision !== currentSessionRevision || phase !== 'unlocked') throw new RequestError('locked', 'The password session changed. Try again.');
-            const url = `https://${domain}`;
-            data = await nativeRequest(list ? accountsMessage(url) : passwordMessage(url, username), client);
-          }
         } finally {
           if (accessID) {
             try { await native('endPasswordAccess', { accessID }); }
