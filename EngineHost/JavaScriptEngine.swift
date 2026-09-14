@@ -128,7 +128,16 @@ final class JavaScriptEngine {
                     else { try await passwordAccess.end(accessID) }
                     complete(id)
                 } catch {
-                    complete(id, error: EngineFailure("password_access", "Could not restore or change the password approval setting."))
+                    // A failed guard need not discard Apple's authenticated session
+                    // once protection is verified restored. Never return a password
+                    // from the failed operation; subsequent requests reauthorize.
+                    var restored = false
+                    do {
+                        try await passwordAccess.recover(requireEnabled: true)
+                        restored = true
+                    } catch { }
+                    complete(id, error: EngineFailure("password_access", "Could not restore or change the password approval setting."),
+                             result: ["accessRestored": restored])
                 }
             }
         case "emit":

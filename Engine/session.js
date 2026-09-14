@@ -210,6 +210,7 @@
       }
       let data;
       const accessID = authorization?.remote === true ? __uuid() : null;
+      let queryPending = false, accessRestored = !accessID;
       try {
         if (accessID) {
           activeAccess = { id: accessID, expired: false };
@@ -219,17 +220,24 @@
           checkClient(client);
           if (activeAccess?.expired) throw new RequestError('timeout', 'Password access timed out. Try again.');
           if (generation !== currentGeneration || sessionRevision !== currentSessionRevision || phase !== 'unlocked') throw new RequestError('locked', 'The password session changed. Try again.');
+          queryPending = true;
           data = await nativeRequest(message, client);
+          queryPending = false;
         } finally {
           if (accessID) {
-            try { await native('endPasswordAccess', { accessID }); }
+            try { await native('endPasswordAccess', { accessID }); accessRestored = true; }
             finally { activeAccess = null; }
           }
         }
       }
       catch (error) {
         activeAccess = null;
-        // End the old native session before another request can receive a late reply.
+        // Only reuse a session when no native reply can arrive late and protection
+        // has been restored. The next get still requires a new phone approval.
+        if (!queryPending && (accessRestored || error.accessRestored === true)) {
+          checkClient(client);
+          throw error;
+        }
         await lock(error);
         checkClient(client);
         if (error.code !== 'locked' || attempt) throw error;
@@ -365,7 +373,11 @@
       }
       case 'nativeResult': {
         const operation = takeOperation(event.id);
-        if (event.error) operation?.reject(new RequestError(event.error.code, event.error.message));
+        if (event.error) {
+          const error = new RequestError(event.error.code, event.error.message);
+          error.accessRestored = ['beginPasswordAccess', 'endPasswordAccess'].includes(operation?.op) && event.result?.accessRestored === true;
+          operation?.reject(error);
+        }
         else operation?.resolve(event.result);
         break;
       }

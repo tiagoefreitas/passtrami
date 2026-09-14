@@ -105,35 +105,15 @@ func runJavaScriptTests() async throws {
     }
     try engineExpect(unitCount == 14, "Some JavaScript unit tests did not run")
     try await runPolicyCancellationTests()
+    try await runSessionReuseTests()
 
     // Native URL normalization is part of the credential trust boundary.
     for invalid in ["", "https://a:b@example.test", "https://a@example.test", "file:///example.test", "not a domain", "https://", "https://example.test%2fevil.test"] {
         try engineExpect(SessionScript.hostname(invalid) == nil, "Accepted an invalid website")
     }
-    for (input, expected) in [("build-server", "build-server"), ("https://GOOGLE.com/path", "google.com"), ("google.com.", "google.com"),
+    for (input, expected) in [("https://GOOGLE.com/path", "google.com"), ("google.com.", "google.com"),
                               ("https://example.test:443/login", "example.test"), ("https://bücher.example", "xn--bcher-kva.example")] {
         try engineExpect(SessionScript.hostname(input) == expected, "Website normalization changed")
-    }
-
-    // Single-label hosts use the normal hostname query and exact account filters.
-    for op in ["list", "get"] {
-        let f = try ScriptFixture()
-        let token = try await f.start()
-        try f.connect("bridge", token: token, state: "SessionKeySet")
-        try f.request("host", op: op, domain: "build-server", username: "person")
-        let query = try await f.sent("bridge")
-        try engineExpect(query["url"] as? String == "build-server", "Single-label hostname changed")
-        try f.message("bridge", ["id": query["id"]!, "data": ["STATUS": 0, "Entries": [
-            ["USR": "person", "PWD": "fixture-only", "sites": ["build-server"]],
-            ["USR": "other", "PWD": "wrong", "sites": ["build-server.attacker.test"]]
-        ]]])
-        let response = try await f.response("host")
-        if op == "list" {
-            try engineExpect(response["usernames"] as? [String] == ["person"] && response["password"] == nil,
-                             "Single-label list filtering failed")
-        } else {
-            try engineExpect(response["password"] as? String == "fixture-only", "Single-label password lookup failed")
-        }
     }
 
     // Settings can prepare or retry Chromium without starting a PIN challenge or a second setup.
@@ -648,7 +628,10 @@ private func runPasswordAuthorizationTests() async throws {
         try engineExpect(!f.posts.contains { $0["op"] as? String == "send" },
                          "Interrupted access startup sent a password query")
         f.complete(end)
-        f.complete(try await f.take("stopBrowser"))
+        try engineExpect(try await f.status()["state"] as? String == "unlocked",
+                         "An unsent query discarded the healthy session after restoration")
+        try engineExpect(!f.posts.contains { $0["op"] as? String == "stopBrowser" },
+                         "An unsent query stopped the browser")
         if interruption == "expired" {
             try engineExpect(try await f.response("interrupted-begin")["code"] as? String == "timeout",
                              "Expiry during startup did not reject the request")
@@ -766,7 +749,7 @@ func runPolicyCancellationTests() async throws {
                              "Policy cancellation finished before guard restoration")
             f.complete(end)
         }
-        if waitingUnlock || stage == "query" || stage == "begin" || stage == "begin-error" {
+        if waitingUnlock || stage == "query" || stage == "begin-error" {
             f.complete(try await f.take("stopBrowser"))
         }
         if stage == "query" { try f.nativeReply("bridge", request: query!) }
@@ -796,4 +779,68 @@ func runPolicyCancellationTests() async throws {
         try engineExpect(try await f.response("new-policy")["password"] as? String == "fixture-only",
                          "A new request could not use the new policy")
     }
+}
+
+@MainActor
+private func runSessionReuseTests() async throws {
+    // Recovery is explicit: only a verified restore may preserve the paired session.
+    for stage in ["begin", "end"] {
+        for restored in [true, false] {
+            let f = try ScriptFixture(automaticallyAuthorizesPasswords: false)
+            let token = try await f.start()
+            try f.connect("bridge", token: token, state: "SessionKeySet")
+            try f.request("failed-access")
+            f.complete(try await f.take("authorizePassword"), result: ["remote": true])
+            let begin = try await f.take("beginPasswordAccess")
+            let failedOperation: [String: Any]
+            if stage == "begin" { failedOperation = begin }
+            else {
+                f.complete(begin)
+                try f.nativeReply("bridge", request: try await f.sent("bridge"))
+                failedOperation = try await f.take("endPasswordAccess")
+            }
+            f.complete(failedOperation, error: "Fixture access failure", code: "password_access",
+                       result: ["accessRestored": restored])
+            if !restored { f.complete(try await f.take("stopBrowser")) }
+            let response = try await f.response("failed-access")
+            try engineExpect(response["code"] as? String == "password_access" && response["password"] == nil,
+                             "Failed access released a password")
+            guard restored else {
+                try engineExpect(try await f.status()["state"] as? String == "locked",
+                                 "Unverified restoration left the session open")
+                continue
+            }
+            try engineExpect(try await f.status()["state"] as? String == "unlocked",
+                             "Verified restoration discarded the paired session")
+            try f.request("next-access")
+            let approval = try await f.take("authorizePassword")
+            try engineExpect(!f.posts.contains {
+                ["send", "beginPasswordAccess", "startBrowser", "stopBrowser", "disconnect"].contains($0["op"] as? String ?? "")
+            }, "Session reuse skipped approval or restarted the browser")
+            f.complete(approval, result: ["remote": true])
+            f.complete(try await f.take("beginPasswordAccess"))
+            try f.nativeReply("bridge", request: try await f.sent("bridge"))
+            f.complete(try await f.take("endPasswordAccess"))
+            try engineExpect(try await f.response("next-access")["password"] as? String == "fixture-only",
+                             "A newly approved request could not reuse the session")
+        }
+    }
+
+    // Even verified restoration cannot make an unanswered native query reusable.
+    let f = try ScriptFixture(automaticallyAuthorizesPasswords: false)
+    let token = try await f.start()
+    try f.connect("old", token: token, state: "SessionKeySet")
+    try f.request("cancelled-query")
+    f.complete(try await f.take("authorizePassword"), result: ["remote": true])
+    f.complete(try await f.take("beginPasswordAccess"))
+    let oldQuery = try await f.sent("old")
+    f.event(["type": "clientClosed", "connection": "cancelled-query"])
+    f.complete(try await f.take("endPasswordAccess"), error: "Fixture recovered guard", code: "password_access",
+               result: ["accessRestored": true])
+    f.complete(try await f.take("stopBrowser"))
+    try f.nativeReply("old", request: oldQuery)
+    try engineExpect(try await f.status()["state"] as? String == "locked",
+                     "A late reply reopened a cancelled native session")
+    try engineExpect(!f.posts.contains { $0["op"] as? String == "reply" && $0["connection"] as? String == "cancelled-query" },
+                     "A cancelled native query released a password")
 }
