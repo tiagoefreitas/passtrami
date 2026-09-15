@@ -209,7 +209,8 @@
       await ensureUnlocked(client);
       const currentGeneration = generation;
       const currentSessionRevision = sessionRevision;
-      const authorization = list ? null : await native('authorizePassword', { domain, username, connection: client.connection }, client);
+      const authorization = list ? null : await native('authorizePassword', { domain, username, connection: client.connection }, client)
+        .catch(error => { diagnose('approval_failed', error.code); throw error; });
       checkClient(client);
       if (generation !== currentGeneration || sessionRevision !== currentSessionRevision || phase !== 'unlocked') {
         throw new RequestError('locked', 'The password session changed. Try again.');

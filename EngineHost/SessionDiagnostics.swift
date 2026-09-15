@@ -12,7 +12,7 @@ enum SessionDiagnostics {
     static func message(_ name: String, detail: String = "", value: Int? = nil) -> String? {
         let events: Set<String> = ["native_state", "session_lock", "native_timeout", "request_failed",
                                    "bridge_closed", "browser_exited", "access_expired", "apple_error",
-                                   "approval_requested", "approval_reuse_requested", "approval_granted", "approval_retained", "approval_reused"]
+                                   "approval_failed", "approval_requested", "approval_reuse_requested", "approval_granted", "approval_retained", "approval_reused"]
         guard events.contains(name) else { return nil }
         if name == "apple_error" {
             guard let value, (0...1_000).contains(value) else { return nil }
@@ -20,7 +20,7 @@ enum SessionDiagnostics {
         }
         let details: Set<String> = ["NotInSession", "ChallengeSent", "MSG1Set", "SessionKeySet", "CheckEngine",
                                     "NativeSupportNotInstalled", "IncompatibleOS", "Connecting", "locked",
-                                    "cancelled", "timeout", "password_access", "native_error", "native_helper"]
+                                    "cancelled", "timeout", "device_approval", "password_access", "native_error", "native_helper"]
         return details.contains(detail) ? "\(name) \(detail)" : name
     }
 }

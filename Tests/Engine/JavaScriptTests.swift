@@ -396,6 +396,10 @@ private func runPasswordAuthorizationTests() async throws {
         try engineExpect(!f.posts.contains {
             ["send", "beginPasswordAccess", "endPasswordAccess", "stopBrowser"].contains($0["op"] as? String ?? "")
         }, "Denied approval touched the password session")
+        try engineExpect(f.posts.contains {
+            $0["op"] as? String == "diagnostic" && $0["name"] as? String == "approval_failed" &&
+            $0["detail"] as? String == "device_approval"
+        }, "Approval failure before the native query was not diagnosed")
     }
 
     // Closing a client cancels its app approval; a late success must not send that get.

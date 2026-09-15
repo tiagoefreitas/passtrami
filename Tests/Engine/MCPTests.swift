@@ -181,6 +181,8 @@ func runMCPTests() async throws {
 
     try engineExpect(SessionDiagnostics.message(sentinel) == nil, "Diagnostics accepted an arbitrary event.")
     try engineExpect(SessionDiagnostics.message("request_failed", detail: sentinel) == "request_failed", "Diagnostics exposed error contents.")
+    try engineExpect(SessionDiagnostics.message("approval_failed", detail: "device_approval") == "approval_failed device_approval", "Approval failure was lost.")
+    try engineExpect(SessionDiagnostics.message("approval_failed", detail: sentinel) == "approval_failed", "Approval diagnostics exposed error contents.")
     try engineExpect(SessionDiagnostics.message("apple_error", value: 9) == "apple_error status=9", "Apple status was lost.")
     try engineExpect(SessionDiagnostics.message("apple_error", value: 999_999) == nil, "Diagnostics accepted an unbounded numeric value.")
 
