@@ -29,10 +29,6 @@ For `get`, the bridge sends native command 5 with an encrypted body containing `
 
 Apple's helper controls authentication. A paired session can still require system authentication; a request does not guarantee a new Touch ID prompt.
 
-Pending work belongs to the current browser session. A disconnect, lock, or unanswered native query ends that session before another request can use it, preventing late replies from reaching a later request. Errors before a query is sent or after its response keep the session only when password protection is verified restored; the next password request still requires approval or a valid retained MCP approval. Restarting the app or losing Apple’s native session still requires Apple’s unlock flow.
+Pending work belongs to the current browser session. A disconnect, lock, or failed or cancelled native request ends that session before another request can use it. This prevents a late native reply from being assigned to a later request.
 
 State events and errors must not contain PINs, session tokens, encrypted payloads, passwords, or full credential responses. Ordinary `get` returns the password through the requesting CLI connection. MCP requests use a separate engine response path: `MCPBroker` converts the credential to a temporary pipe and returns only its metadata. The reserved `mcp:` connection prefix prevents a late password reply from reaching the ordinary CLI reply path. The app alone controls MCP enablement through its private stdin connection to the engine. See [MCP access](mcp.md).
-
-## Session diagnostics
-
-The macOS unified log category `SessionLifecycle` under `io.zats.Passtrami` records fixed state changes, teardown reasons, approval/reuse events and Apple numeric error codes. The bridge records Apple errors before the original handler can reset the session. Diagnostics exclude domains, account names, connection IDs, PINs, payloads and passwords. The existing `PreferenceGuard` category records restoration failures.

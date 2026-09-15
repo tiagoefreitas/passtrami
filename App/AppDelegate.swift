@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch event.type {
         case "deviceApprovalRequired":
             if let id = event.id, let domain = event.domain, let username = event.username {
-                requestDeviceApproval(id: id, domain: domain, username: username, retained: event.retainedApproval == true)
+                requestDeviceApproval(id: id, domain: domain, username: username)
             }
         case "deviceApprovalCancelled":
             if let id = event.id { approvalTasks.removeValue(forKey: id)?.cancel() }
@@ -231,13 +231,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         engine.send("lock")
     }
 
-    private func requestDeviceApproval(id: String, domain: String, username: String, retained: Bool) {
+    private func requestDeviceApproval(id: String, domain: String, username: String) {
         approvalTasks[id]?.cancel()
         approvalTasks[id] = Task { [weak self] in
             guard let self else { return }
             defer { approvalTasks.removeValue(forKey: id) }
             do {
-                let remote = try await companion.authorizePasswordAccess(domain: domain, username: username, reuseApproval: retained)
+                let remote = try await companion.authorizePasswordAccess(domain: domain, username: username)
                 try Task.checkCancellation()
                 engine.finishDeviceApproval(id: id, remote: remote)
             } catch is CancellationError {

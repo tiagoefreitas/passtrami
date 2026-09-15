@@ -56,9 +56,3 @@ An unused pipe expires after 60 seconds. At most 16 pipes and 16 pending MCP acc
 Lock, loss of the unlocked state, browser shutdown, MCP disable, and app shutdown revoke unused pipes. Explicit lock and MCP disable cancel pending MCP requests. A normal helper shutdown revokes its session's leases. If the helper is killed, the 60-second expiry still applies. Engine restart removes stale FIFO paths. A failed metadata response also revokes its pipe.
 
 Once a value is delivered, Passtrami cannot remove it from the consumer's memory. FIFO permissions do not isolate two processes running as the same user. Multiple readers must not open one lease. This design keeps passwords out of normal MCP messages; it does not stop unrestricted local code from reading a pipe, running `passtrami get`, or printing a password. Never send the pipe contents to an agent tool result, log, or transcript.
-
-## Remembered approval
-
-Settings → Tools → MCP → Remember iPhone Approval defaults to **2 hours**. Choose Never or a duration up to 24 hours. A verified iPhone approval applies to the same normalized domain and exact username on the same MCP connection until its original deadline; reuse does not extend it. Other connections, accounts and CLI requests require their own approval.
-
-Only the approval is retained in engine memory. Each use validates the current phone pairing and retrieves a fresh password into a new single-use pipe. Apple authentication and the guarded access window still apply. Disconnecting the MCP session, locking/restarting Passtrami, disabling MCP, unpairing, or changing approval settings clears remembered approvals. Pipe lifetime remains 60 seconds.

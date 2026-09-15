@@ -30,14 +30,16 @@ enum CredentialServer {
     Enable MCP in Passtrami Settings before calling credential tools. The app starts when needed.
     The tools return account names and delivery metadata, never password values. The user completes any
     unlock on the Mac and approves access there or on the paired iPhone; do not request a PIN or
-    password through MCP. iPhone approval can be remembered for the same domain and account on
-    this MCP connection (2 hours by default, configurable in Settings). Reuse does not extend the
-    window, and every call still retrieves a fresh password into a new one-use pipe.
+    password through MCP.
 
     ## Complete flow
     1. Call status. If enabled is false, ask the user to enable MCP in Passtrami Settings.
-    2. Use the specified domain and username. If the account is unknown, call list_accounts for the
-       intended domain. Ask the user to resolve any ambiguity. Account names may appear in the transcript.
+    2. Use the saved website hostname and exact username. Bare single-label hostnames such as
+       build-server are valid; do not invent a suffix or add https:// to repair a failed lookup.
+       A record's display name is not its website. These tools currently cannot retrieve a record
+       by display name alone or without an associated website. If only a name is supplied, clarify
+       the saved website instead of treating the name as a domain. If the username is unknown,
+       call list_accounts for the intended website. Account names may appear in the transcript.
     3. Prepare the application code that will use the password. It must accept a pipe path, read its
        bytes internally, send the password only to the intended service, and return a nonsecret result.
        Do this before requesting the password because the lease lasts only 60 seconds.

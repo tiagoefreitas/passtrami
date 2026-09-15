@@ -6,14 +6,6 @@
   const send = (value) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(value));
   const state = () => send({ type: "nativeState", state:
     !nativeReady && ["NotInSession", "CheckEngine"].includes(g_theState) ? "Connecting" : g_theState });
-  // Capture Apple's fixed status before its listener resets the session and hides the cause.
-  if (typeof STATUSErrorReturned === "function") {
-    const originalStatusError = STATUSErrorReturned;
-    STATUSErrorReturned = function (status) {
-      if (Number.isInteger(status)) send({ type: "diagnostic", name: "apple_error", value: status });
-      return originalStatusError.apply(this, arguments);
-    };
-  }
   const originalSetState = setGlobalState;
   setGlobalState = function (...args) {
     const result = originalSetState.apply(this, args);

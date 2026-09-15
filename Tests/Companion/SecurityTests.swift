@@ -17,12 +17,10 @@ extension UnpairTests {
                 case "offline": CompanionCloudStore.accountError = CKError(.networkUnavailable)
                 default: break
                 }
-                for reuse in [false, true] {
-                    do {
-                        _ = try await service.authorizePasswordAccess(domain: "example.invalid", username: "test", reuseApproval: reuse)
-                        preconditionFailure("A \(state) pairing must not authorize password access")
-                    } catch { }
-                }
+                do {
+                    _ = try await service.authorizePasswordAccess(domain: "example.invalid", username: "test")
+                    preconditionFailure("A \(state) pairing must not authorize local password access")
+                } catch { }
                 expect(service.requiresPhoneApproval && policy.required == true,
                        "A \(state) pairing must retain the protected requirement")
                 expect(makeService(role: .mac, defaults: defaults).requiresPhoneApproval,
@@ -36,12 +34,7 @@ extension UnpairTests {
             policy.required = true
             CompanionCloudStore.pair = try pairRecord()
             let service = makeService(role: .mac, defaults: defaults)
-            let remote = try await service.authorizePasswordAccess(domain: "example.invalid", username: "test", reuseApproval: true)
-            expect(remote && CompanionCloudStore.saveCount == 0, "Retained approval must validate pairing without making a new request")
-            var revoked = false
-            service.onApprovalPolicyChange = { _ in revoked = true }
             await service.unpair()
-            expect(revoked, "Unpairing must revoke retained approvals even when the requirement stays enabled")
             expect(!service.hasLocalPairing && service.requiresPhoneApproval && policy.required == true,
                    "Explicit unpair must not disable the separate approval requirement")
         }

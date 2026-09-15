@@ -13,7 +13,6 @@ struct EngineEvent: Decodable, Sendable {
     var id: String? = nil
     var domain: String? = nil
     var username: String? = nil
-    var retainedApproval: Bool? = nil
 }
 
 @MainActor
@@ -68,8 +67,7 @@ final class EngineProcess {
         outputReader = reader
         do {
             // Queue app-owned access policy before the child can accept requests.
-            try writeCommand(["op": "mcp", "enabled": MCPSettings().isEnabled,
-                              "approvalRetentionSeconds": MCPSettings().approvalRetentionSeconds], to: stdin.fileHandleForWriting)
+            try writeCommand(["op": "mcp", "enabled": MCPSettings().isEnabled], to: stdin.fileHandleForWriting)
             try child.run()
         } catch {
             reader.finish {}
@@ -88,8 +86,7 @@ final class EngineProcess {
     }
 
     func setMCPEnabled(_ enabled: Bool) {
-        sendCommand(["op": "mcp", "enabled": enabled,
-                     "approvalRetentionSeconds": MCPSettings().approvalRetentionSeconds])
+        sendCommand(["op": "mcp", "enabled": enabled])
     }
 
     func setPhoneApprovalRequired(_ required: Bool) {
