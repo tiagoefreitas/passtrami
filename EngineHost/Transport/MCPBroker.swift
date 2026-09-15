@@ -5,9 +5,18 @@ import Foundation
 final class MCPBroker {
     private enum Request {
         case list
-        case prepare(session: String)
+        case prepare(ApprovalKey)
     }
 
+    private struct ApprovalKey: Hashable {
+        let session: String
+        let domain: String
+        let username: String
+    }
+
+    private var approvals: [ApprovalKey: ContinuousClock.Instant] = [:]
+    private var retentionSeconds = 7_200
+    private let now: () -> ContinuousClock.Instant
     private let pipes: PasswordPipes
     private let forward: (String, String) -> Void
     private let reply: (String, String) -> Void
@@ -18,11 +27,43 @@ final class MCPBroker {
     private(set) var state = "starting"
 
     init(pipes: PasswordPipes, forward: @escaping (String, String) -> Void,
-         reply: @escaping (String, String) -> Void, cancel: @escaping (String) -> Void) {
+         reply: @escaping (String, String) -> Void, cancel: @escaping (String) -> Void,
+         now: @escaping () -> ContinuousClock.Instant = { .now }) {
+        self.now = now
         self.pipes = pipes
         self.forward = forward
         self.reply = reply
         self.cancel = cancel
+    }
+
+    func setApprovalRetention(seconds: Int) {
+        guard (0...86_400).contains(seconds), seconds != retentionSeconds else { return }
+        invalidate()
+        retentionSeconds = seconds
+    }
+
+    // Only the broker's pending MCP request supplies the scope. CLI fields cannot grant reuse.
+    func hasRetainedApproval(for connection: String) -> Bool {
+        approvals = approvals.filter { $0.value > now() }
+        guard enabled, state == "unlocked", let key = approvalKey(for: connection) else { return false }
+        return approvals[key] != nil
+    }
+
+    func retainApproval(for connection: String) {
+        guard enabled, state == "unlocked", retentionSeconds > 0,
+              let key = approvalKey(for: connection) else { return }
+        approvals = approvals.filter { $0.value > now() }
+        if approvals.count >= 256, let oldest = approvals.min(by: { $0.value < $1.value })?.key {
+            approvals.removeValue(forKey: oldest)
+        }
+        approvals[key] = now().advanced(by: .seconds(retentionSeconds))
+        SessionDiagnostics.record("approval_retained")
+    }
+
+    private func approvalKey(for connection: String) -> ApprovalKey? {
+        guard connection.hasPrefix("mcp:"),
+              case let .prepare(key) = pending[String(connection.dropFirst(4))] else { return nil }
+        return key
     }
 
     func setEnabled(_ value: Bool) {
@@ -32,13 +73,14 @@ final class MCPBroker {
 
     func setState(_ value: String) {
         state = value
-        if value != "unlocked" { pipes.revokeAll() }
+        if value != "unlocked" { pipes.revokeAll(); approvals.removeAll() }
     }
 
     func revokePipes() { pipes.revokeAll() }
 
     func invalidate(code: String = "cancelled", message: String = "The password request was cancelled.") {
         pipes.revokeAll()
+        approvals.removeAll()
         let clients = Array(pending.keys)
         pending.removeAll()
         for id in clients {
@@ -67,8 +109,9 @@ final class MCPBroker {
         if op == "mcp_close" {
             if let session = validSession(object) {
                 pipes.revoke(session: session)
+                approvals = approvals.filter { $0.key.session != session }
                 let clients = pending.keys.filter {
-                    if case let .prepare(owner) = pending[$0] { return owner == session }
+                    if case let .prepare(key) = pending[$0] { return key.session == session }
                     return false
                 }
                 for client in clients { disconnected(client); send(client, failure("cancelled", "The MCP client disconnected.")) }
@@ -105,7 +148,7 @@ final class MCPBroker {
                 send(id, failure("invalid_request", "An account name and valid MCP session are required."))
                 return true
             }
-            pending[id] = .prepare(session: session)
+            pending[id] = .prepare(ApprovalKey(session: session, domain: SessionScript.hostname(domain)!, username: username))
             request["op"] = "get"
             request["username"] = username
         } else { pending[id] = .list }
@@ -140,7 +183,8 @@ final class MCPBroker {
                 send(id, failure("internal", "The password service sent an invalid account list.")); return
             }
             send(id, ["ok": true, "usernames": usernames])
-        case let .prepare(session):
+        case let .prepare(key):
+            let session = key.session
             guard state == "unlocked", let password = result["password"] as? String else {
                 send(id, failure("locked", "Unlock the password service and try again.")); return
             }

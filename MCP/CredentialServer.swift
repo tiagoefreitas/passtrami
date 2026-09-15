@@ -30,7 +30,9 @@ enum CredentialServer {
     Enable MCP in Passtrami Settings before calling credential tools. The app starts when needed.
     The tools return account names and delivery metadata, never password values. The user completes any
     unlock on the Mac and approves access there or on the paired iPhone; do not request a PIN or
-    password through MCP.
+    password through MCP. iPhone approval can be remembered for the same domain and account on
+    this MCP connection (2 hours by default, configurable in Settings). Reuse does not extend the
+    window, and every call still retrieves a fresh password into a new one-use pipe.
 
     ## Complete flow
     1. Call status. If enabled is false, ask the user to enable MCP in Passtrami Settings.

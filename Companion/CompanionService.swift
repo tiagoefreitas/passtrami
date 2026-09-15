@@ -306,7 +306,7 @@ final class CompanionService {
 
     // The Mac routes every password request through the persisted local policy.
     // Pairing loss or an unavailable cloud account must not select local approval.
-    func authorizePasswordAccess(domain: String, username: String) async throws -> Bool {
+    func authorizePasswordAccess(domain: String, username: String, reuseApproval: Bool = false) async throws -> Bool {
         guard role == .mac else { throw CompanionError.message("Password requests must start on your Mac.") }
         try Task.checkCancellation()
         try reloadApprovalPolicy()
@@ -314,6 +314,12 @@ final class CompanionService {
             throw CompanionError.message("Choose an approval method in Devices settings before you request a password.")
         }
         guard requiresPhoneApproval else { return false }
+        if reuseApproval {
+            guard let trust else { throw CompanionError.notPaired }
+            _ = try await verifyCurrentPair(trust)
+            try Task.checkCancellation()
+            return true
+        }
         try await requestApproval(domain: domain, username: username)
         return true
     }
@@ -598,12 +604,14 @@ final class CompanionService {
     }
 
     private func clearTrust() {
+        let hadTrust = trust != nil
         trust = nil
         defaults.removeObject(forKey: "companion.trust")
         hasLocalPairing = false
         pairingID = nil
         pairedDevice = nil
         subscribedPairID = nil
+        if role == .mac, hadTrust { onApprovalPolicyChange?(requiresPhoneApproval) }
     }
 
     private func showCode(_ code: String, expiresAt: Date) {

@@ -64,6 +64,15 @@ let defaults = UserDefaults(suiteName: defaultsDomain)!
 defer { defaults.removePersistentDomain(forName: defaultsDomain) }
 let mcpSettings = MCPSettings(defaults: defaults)
 expect(!mcpSettings.isEnabled, "MCP must be disabled before the user enables it")
+expect(mcpSettings.approvalRetentionSeconds == 7_200, "Approval retention must default to two hours")
+mcpSettings.approvalRetentionSeconds = 900
+expect(MCPSettings(defaults: defaults).approvalRetentionSeconds == 900, "Custom approval duration must persist")
+mcpSettings.approvalRetentionSeconds = 0
+expect(mcpSettings.approvalRetentionSeconds == 0, "Retention must support Never")
+mcpSettings.approvalRetentionSeconds = -1
+expect(mcpSettings.approvalRetentionSeconds == 0, "Negative retention must be disabled")
+mcpSettings.approvalRetentionSeconds = 100_000
+expect(mcpSettings.approvalRetentionSeconds == 86_400, "Retention must stay bounded")
 mcpSettings.isEnabled = true
 expect(MCPSettings(defaults: defaults).isEnabled, "MCP enable choice must persist")
 mcpSettings.isEnabled = false

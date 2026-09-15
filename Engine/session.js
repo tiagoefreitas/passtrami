@@ -12,6 +12,7 @@
   let pending = null, queue = Promise.resolve(), activeAccess = null;
 
   function post(message) { __nativePost(JSON.stringify(message)); }
+  function diagnose(name, detail = '', value) { post({ op: 'diagnostic', name, detail, value }); }
   function clientError(client) {
     return client?.policyError || (client?.cancelled ? new RequestError('cancelled', 'Request cancelled.') : null);
   }
@@ -99,6 +100,7 @@
   function stateChanged(state) {
     const previous = nativeState;
     if (previous === state) return;
+    diagnose('native_state', state);
     nativeState = state;
     if (previous === 'SessionKeySet') {
       sessionRevision++;
@@ -165,6 +167,7 @@
     });
   }
   function lock(error = new RequestError('cancelled', 'The password session was locked or cancelled.'), finalPhase = 'locked') {
+    diagnose('session_lock', error.code);
     cancelAuthorizations(error);
     if (stopping) return stopping;
     appUnlockRequested = false; challengeSent = false; pinSubmitted = false; generation++; token = null;
@@ -187,7 +190,10 @@
         if (pending?.id === id) rejectPending(clientError(client));
       });
       const timer = later(() => {
-        if (pending?.id === id) rejectPending(new RequestError('timeout', "Apple's authentication request timed out."));
+        if (pending?.id === id) {
+          diagnose('native_timeout');
+          rejectPending(new RequestError('timeout', "Apple's authentication request timed out."));
+        }
       }, 120000);
       pending = { id, resolve, reject, timer, removeCancel };
       try { send({ ...message, id }); } catch (error) { rejectPending(error); }
@@ -203,7 +209,7 @@
       await ensureUnlocked(client);
       const currentGeneration = generation;
       const currentSessionRevision = sessionRevision;
-      const authorization = list ? null : await native('authorizePassword', { domain, username }, client);
+      const authorization = list ? null : await native('authorizePassword', { domain, username, connection: client.connection }, client);
       checkClient(client);
       if (generation !== currentGeneration || sessionRevision !== currentSessionRevision || phase !== 'unlocked') {
         throw new RequestError('locked', 'The password session changed. Try again.');
@@ -231,6 +237,7 @@
         }
       }
       catch (error) {
+        diagnose('request_failed', error.code);
         activeAccess = null;
         // Only reuse a session when no native reply can arrive late and protection
         // has been restored. The next get still requires a new phone approval.
@@ -273,7 +280,7 @@
       if (!['get', 'list'].includes(request?.op)) throw new RequestError('invalid_request', 'Unknown command.');
     } catch (error) { reply(id, failure(error)); return; }
     const handlers = new Set();
-    const client = { cancelled: false, policyError: null,
+    const client = { connection: id, cancelled: false, policyError: null,
       onCancel(handler) { handlers.add(handler); return () => handlers.delete(handler); },
       cancel() {
         if (this.cancelled) return;
@@ -315,7 +322,9 @@
       candidates.delete(id); bridge = id;
       post({ op: 'bridgeAuthenticated', connection: id }); return;
     }
-    if (message.type === 'nativeState' && typeof message.state === 'string') stateChanged(message.state);
+    if (message.type === 'diagnostic' && message.name === 'apple_error' && Number.isInteger(message.value)) {
+      diagnose('apple_error', '', message.value);
+    } else if (message.type === 'nativeState' && typeof message.state === 'string') stateChanged(message.state);
     else if (pending && message.id === pending.id) {
       const request = pending; pending = null;
       cancelTimer(request.timer); request.removeCancel();
@@ -361,11 +370,11 @@
       case 'bridgeText': receiveBridge(event.connection, event.text); break;
       case 'bridgeClosed': {
         candidates.delete(event.connection);
-        if (bridge === event.connection) void lock(new RequestError('locked', 'The password session closed.'));
+        if (bridge === event.connection) { diagnose('bridge_closed'); void lock(new RequestError('locked', 'The password session closed.')); }
         break;
       }
       case 'browserExited':
-        if (event.token === token) void lock(new RequestError('locked', 'The browser stopped.')); break;
+        if (event.token === token) { diagnose('browser_exited'); void lock(new RequestError('locked', 'The browser stopped.')); } break;
       case 'progress':
         if (event.token === token && !shuttingDown) setPhase('starting', event.message); break;
       case 'timer': {
@@ -383,6 +392,7 @@
       }
       case 'passwordAccessExpired':
         if (activeAccess?.id === event.accessID) {
+          diagnose('access_expired');
           activeAccess.expired = true;
           rejectPending(new RequestError('timeout', 'Password access timed out. Try again.'));
         }

@@ -86,6 +86,14 @@ final class SettingsModel {
     private(set) var cliError: String?
     private(set) var mcpError: String?
 
+    var approvalRetentionSeconds: Int {
+        didSet {
+            guard approvalRetentionSeconds != oldValue else { return }
+            mcpSettings.approvalRetentionSeconds = approvalRetentionSeconds
+            onMCPChange(mcpEnabled)
+        }
+    }
+
     var mcpEnabled: Bool {
         didSet {
             guard mcpEnabled != oldValue else { return }
@@ -109,6 +117,7 @@ final class SettingsModel {
         self.mcpSettings = mcpSettings
         self.onMCPChange = onMCPChange
         mcpEnabled = mcpSettings.isEnabled
+        approvalRetentionSeconds = mcpSettings.approvalRetentionSeconds
     }
 
     func refresh() {

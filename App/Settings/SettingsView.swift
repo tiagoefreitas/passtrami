@@ -175,6 +175,16 @@ private struct MCPSettingsSection: View {
             Toggle("Enable MCP", isOn: $model.mcpEnabled)
                 .toggleStyle(.switch)
             if model.mcpEnabled {
+                Picker("Remember iPhone Approval", selection: $model.approvalRetentionSeconds) {
+                    Text("Never").tag(0)
+                    Text("15 minutes").tag(900)
+                    Text("30 minutes").tag(1_800)
+                    Text("1 hour").tag(3_600)
+                    Text("2 hours").tag(7_200)
+                    Text("4 hours").tag(14_400)
+                    Text("8 hours").tag(28_800)
+                    Text("24 hours").tag(86_400)
+                }
                 LabeledContent("Server Configuration") {
                     Button("Copy Configuration", action: model.copyMCPConfiguration)
                         .fixedSize()
@@ -186,6 +196,9 @@ private struct MCPSettingsSection: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Lets AI agents use passwords without including password values in session transcripts.")
+                if model.mcpEnabled {
+                    Text("Remembered approval applies only to the same domain and account on the same MCP connection. Locking Passtrami, closing the connection, or changing approval settings clears it.")
+                }
                 if model.mcpEnabled, let error = model.mcpError {
                     Text(error)
                 }

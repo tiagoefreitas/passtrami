@@ -19,7 +19,11 @@ final class JavaScriptEngine {
     private var input = Data()
     private var stopping = false
     private var instanceLock: EngineInstanceLock?
-    private var authorizations = Set<String>()
+    private struct Authorization {
+        let owner: String
+        var retained = false
+    }
+    private var authorizations: [String: Authorization] = [:]
     private var phoneApprovalRequired: Bool
     private var approvalPolicyRevision = 0
     private lazy var passwordAccess = TouchIDPreferenceWindow(directory: dataDirectory) { [weak self] accessID in
@@ -103,21 +107,26 @@ final class JavaScriptEngine {
         switch operation {
         case "authorizePassword":
             guard let domain = message["domain"] as? String, let username = message["username"] as? String else { return }
-            authorizations.insert(id)
+            let owner = message["connection"] as? String ?? ""
+            authorizations[id] = Authorization(owner: owner)
             Task { [weak self] in
                 guard let self else { return }
                 do {
                     // A failed restore must also block later requests that use local approval.
                     try await passwordAccess.recover(requireEnabled: phoneApprovalRequired)
-                    guard !stopping, authorizations.contains(id) else { return }
-                    emit(["type": "deviceApprovalRequired", "id": id, "domain": domain, "username": username])
+                    guard !stopping, authorizations[id] != nil else { return }
+                    let retained = phoneApprovalRequired && mcp?.hasRetainedApproval(for: owner) == true
+                    authorizations[id]?.retained = retained
+                    SessionDiagnostics.record(retained ? "approval_reuse_requested" : "approval_requested")
+                    emit(["type": "deviceApprovalRequired", "id": id, "domain": domain, "username": username,
+                          "retainedApproval": retained])
                 } catch {
-                    guard authorizations.remove(id) != nil else { return }
+                    guard authorizations.removeValue(forKey: id) != nil else { return }
                     complete(id, error: EngineFailure("password_access", "Could not restore the password approval setting."))
                 }
             }
         case "cancelAuthorization":
-            authorizations.remove(id)
+            authorizations.removeValue(forKey: id)
             emit(["type": "deviceApprovalCancelled", "id": id])
         case "beginPasswordAccess", "endPasswordAccess":
             guard let accessID = message["accessID"] as? String else { return }
@@ -140,6 +149,9 @@ final class JavaScriptEngine {
                              result: ["accessRestored": restored])
                 }
             }
+        case "diagnostic":
+            SessionDiagnostics.record(message["name"] as? String ?? "", detail: message["detail"] as? String ?? "",
+                                      value: message["value"] as? Int)
         case "emit":
             if let event = message["event"] as? [String: Any] { emit(event) }
         case "timer":
@@ -272,24 +284,33 @@ final class JavaScriptEngine {
             return
         }
         if value["op"] as? String == "deviceApprovalResult" {
-            guard let id = value["id"] as? String, authorizations.remove(id) != nil else { return }
+            guard let id = value["id"] as? String, let authorization = authorizations.removeValue(forKey: id) else { return }
             if let message = value["error"] as? String {
                 complete(id, error: EngineFailure("device_approval", message))
             } else {
                 let remote = value["remote"] as? Bool == true
+                if authorization.retained, mcp?.hasRetainedApproval(for: authorization.owner) != true {
+                    complete(id, error: EngineFailure("device_approval", "Remembered approval expired. Try again."))
+                    return
+                }
                 if phoneApprovalRequired && !remote {
                     complete(id, error: EngineFailure("device_approval", "iPhone approval is required."))
-                } else { complete(id, result: ["remote": remote]) }
+                } else {
+                    if remote && !authorization.retained { mcp?.retainApproval(for: authorization.owner) }
+                    SessionDiagnostics.record(authorization.retained ? "approval_reused" : "approval_granted")
+                    complete(id, result: ["remote": remote])
+                }
             }
             return
         }
         if value["op"] as? String == "mcp" {
+            if let seconds = value["approvalRetentionSeconds"] as? Int { mcp?.setApprovalRetention(seconds: seconds) }
             if let enabled = value["enabled"] as? Bool { mcp?.setEnabled(enabled) }
             return
         }
         if ["lock", "shutdown"].contains(value["op"] as? String ?? "") {
             mcp?.invalidate()
-            for id in authorizations {
+            for id in authorizations.keys {
                 emit(["type": "deviceApprovalCancelled", "id": id])
                 complete(id, error: EngineFailure("cancelled", "Request cancelled."))
             }

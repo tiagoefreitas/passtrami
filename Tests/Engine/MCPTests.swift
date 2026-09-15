@@ -32,9 +32,11 @@ private final class MCPFixture {
     var forwarded: [(String, String)] = []
     var responses: [(String, String)] = []
     var cancelled: [String] = []
+    var instant = ContinuousClock.now
     lazy var broker = MCPBroker(pipes: pipes, forward: { [unowned self] in forwarded.append(($0, $1)) },
                                reply: { [unowned self] in responses.append(($0, $1)) },
-                               cancel: { [unowned self] in cancelled.append($0) })
+                               cancel: { [unowned self] in cancelled.append($0) },
+                               now: { [unowned self] in instant })
 
     init(lifetime: Duration = .seconds(60), limit: Int = 16) throws {
         root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("passtrami-mcp-tests-\(UUID().uuidString)")
@@ -121,6 +123,66 @@ func runMCPTests() async throws {
     func prepare(_ session: String) -> [String: Any] {
         ["op": "mcp_prepare", "session": session, "domain": "https://EXAMPLE.test/login", "username": "person"]
     }
+
+    // Approval retention is scoped to normalized account + MCP session, never the CLI socket.
+    do {
+        let f = try MCPFixture(); defer { f.close() }
+        f.broker.setEnabled(true); f.broker.setState("unlocked")
+        try f.request("first", prepare(session))
+        try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:first"), "Unapproved work reused approval.")
+        f.broker.retainApproval(for: "mcp:first")
+        try f.nativeReply("first", ["ok": true, "password": sentinel])
+        f.broker.disconnected("first") // Each tool call has its own short-lived engine socket.
+        var same = prepare(session); same["domain"] = "example.test"
+        try f.request("same", same)
+        try engineExpect(f.broker.hasRetainedApproval(for: "mcp:same"), "A new call on the same MCP connection lost approval.")
+        try engineExpect(!f.broker.hasRetainedApproval(for: "same"), "CLI access inherited MCP approval.")
+        for (id, field, value) in [("other-session", "session", otherSession),
+                                   ("other-account", "username", "someone-else"),
+                                   ("other-domain", "domain", "other.example.test")] {
+            var changed = same; changed[field] = value
+            try f.request(id, changed)
+            try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:" + id), "Approval crossed an account or connection boundary.")
+        }
+        f.instant = f.instant.advanced(by: .seconds(7_199))
+        try engineExpect(f.broker.hasRetainedApproval(for: "mcp:same"), "Default approval did not last two hours.")
+        f.instant = f.instant.advanced(by: .seconds(1))
+        try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:same"), "Reuse extended approval or accepted the expiry boundary.")
+    }
+
+    for cause in ["close", "lock", "disable", "policy", "duration"] {
+        let f = try MCPFixture(); defer { f.close() }
+        f.broker.setEnabled(true); f.broker.setState("unlocked")
+        try f.request("first", prepare(session))
+        f.broker.retainApproval(for: "mcp:first")
+        switch cause {
+        case "close": try f.request("close", ["op": "mcp_close", "session": session])
+        case "lock": f.broker.setState("locked"); f.broker.setState("unlocked")
+        case "disable": f.broker.setEnabled(false); f.broker.setEnabled(true)
+        case "duration": f.broker.setApprovalRetention(seconds: 900)
+        default: f.broker.invalidate()
+        }
+        try f.request("next", prepare(session))
+        try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:next"), "Revocation retained an approval: " + cause)
+    }
+
+    do {
+        let f = try MCPFixture(); defer { f.close() }
+        f.broker.setEnabled(true); f.broker.setState("unlocked")
+        f.broker.setApprovalRetention(seconds: 0)
+        try f.request("disabled-retention", prepare(session))
+        f.broker.retainApproval(for: "mcp:disabled-retention")
+        try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:disabled-retention"), "Never retained an approval.")
+        f.broker.setApprovalRetention(seconds: 900)
+        try f.request("short", prepare(session)); f.broker.retainApproval(for: "mcp:short")
+        f.instant = f.instant.advanced(by: .seconds(900))
+        try engineExpect(!f.broker.hasRetainedApproval(for: "mcp:short"), "Custom duration was ignored.")
+    }
+
+    try engineExpect(SessionDiagnostics.message(sentinel) == nil, "Diagnostics accepted an arbitrary event.")
+    try engineExpect(SessionDiagnostics.message("request_failed", detail: sentinel) == "request_failed", "Diagnostics exposed error contents.")
+    try engineExpect(SessionDiagnostics.message("apple_error", value: 9) == "apple_error status=9", "Apple status was lost.")
+    try engineExpect(SessionDiagnostics.message("apple_error", value: 999_999) == nil, "Diagnostics accepted an unbounded numeric value.")
 
     // Disabled access does not reach the session engine. Existing CLI requests still pass through.
     do {

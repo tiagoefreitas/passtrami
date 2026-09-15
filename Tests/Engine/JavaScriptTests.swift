@@ -103,9 +103,22 @@ func runJavaScriptTests() async throws {
         if let unitFailure { throw EngineFailure("test", unitFailure) }
         try engineExpect(!fixture.failed, "JavaScript unit fixture failed")
     }
-    try engineExpect(unitCount == 14, "Some JavaScript unit tests did not run")
+    try engineExpect(unitCount == 15, "Some JavaScript unit tests did not run")
     try await runPolicyCancellationTests()
     try await runSessionReuseTests()
+
+    // The approval scope comes from the transport identity, not client-supplied JSON.
+    do {
+        let f = try ScriptFixture(automaticallyAuthorizesPasswords: false)
+        let token = try await f.start()
+        try f.connect("bridge", token: token, state: "SessionKeySet")
+        f.event(["type": "request", "connection": "actual-client", "text":
+            "{\"op\":\"get\",\"domain\":\"example.test\",\"username\":\"person\",\"connection\":\"mcp:forged\"}"])
+        let approval = try await f.take("authorizePassword")
+        try engineExpect(approval["connection"] as? String == "actual-client", "A client forged its retained approval scope")
+        f.event(["type": "clientClosed", "connection": "actual-client"])
+        _ = try await f.take("cancelAuthorization")
+    }
 
     // Native URL normalization is part of the credential trust boundary.
     for invalid in ["", "https://a:b@example.test", "https://a@example.test", "file:///example.test", "not a domain", "https://", "https://example.test%2fevil.test"] {
@@ -333,7 +346,7 @@ func runJavaScriptTests() async throws {
         _ = try await f.take("shutdown")
     }
     try await runPasswordAuthorizationTests()
-    print("JavaScriptCore: 14 credential/bridge tests, session lifecycle, and password approval checks passed")
+    print("JavaScriptCore: 15 credential/bridge tests, session lifecycle, and password approval checks passed")
 }
 
 @MainActor
