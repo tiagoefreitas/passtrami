@@ -217,7 +217,7 @@
       }
       let data;
       const accessID = authorization?.remote === true ? __uuid() : null;
-      let queryPending = false, accessRestored = !accessID;
+      let queryPending = false, accessRestored = !accessID, queryError;
       try {
         if (accessID) {
           activeAccess = { id: accessID, expired: false };
@@ -230,10 +230,21 @@
           queryPending = true;
           data = await nativeRequest(message, client);
           queryPending = false;
+        } catch (error) {
+          queryError = error;
+          throw error;
         } finally {
           if (accessID) {
             try { await native('endPasswordAccess', { accessID }); accessRestored = true; }
-            finally { activeAccess = null; }
+            catch (error) {
+              // An expired guard can restore protection successfully and still reject end.
+              // Preserve the query failure only after that restoration is verified.
+              if (queryError && error.accessRestored === true) {
+                accessRestored = true;
+                throw queryError;
+              }
+              throw error;
+            } finally { activeAccess = null; }
           }
         }
       }

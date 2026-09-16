@@ -557,6 +557,26 @@ private func runPasswordAuthorizationTests() async throws {
                          "A failed password request returned success or lost its error")
     }
 
+    // Guard expiry must not become a misleading restore failure after verified recovery.
+    for restored in [true, false] {
+        let f = try ScriptFixture(automaticallyAuthorizesPasswords: false)
+        let token = try await f.start()
+        try f.connect("bridge", token: token, state: "SessionKeySet")
+        try f.request("guard-deadline")
+        f.complete(try await f.take("authorizePassword"), result: ["remote": true])
+        let begin = try await f.take("beginPasswordAccess")
+        f.complete(begin)
+        _ = try await f.sent("bridge")
+        f.event(["type": "passwordAccessExpired", "accessID": begin["accessID"]!])
+        f.complete(try await f.take("endPasswordAccess"), error: "Fixture expired guard", code: "password_access",
+                   result: ["accessRestored": restored])
+        f.complete(try await f.take("stopBrowser"))
+        let response = try await f.response("guard-deadline")
+        try engineExpect(response["code"] as? String == (restored ? "timeout" : "password_access") && response["password"] == nil,
+                         "Guard recovery hid the query deadline or ignored failed protection restoration")
+        try engineExpect(try await f.status()["state"] as? String == "locked", "An unanswered native query remained reusable")
+    }
+
     // Session loss or cancellation during restoration must discard a password already received from Apple.
     for interruption in ["lock", "cancelled", "CheckEngine", "NotInSession", "policy"] {
         let f = try ScriptFixture(automaticallyAuthorizesPasswords: false)
